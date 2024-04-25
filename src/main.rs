@@ -1,8 +1,8 @@
-use std::sync::Mutex;
-
+use std::{collections::HashMap, sync::Mutex};
 use reqwest::{header::USER_AGENT, Client, Error};
-use teloxide::{prelude::*, types::{MessageCommon, MessageId, MessageKind, User}, utils::command::BotCommands};
+use teloxide::{prelude::*, types::{MessageId, MessageKind}, utils::command::BotCommands};
 use html2text::from_read;
+use once_cell::sync::Lazy;
 
 struct Menu
 {
@@ -16,7 +16,7 @@ struct PollIds
     seconds_id: MessageId
 }
 
-static mut LAST_POLLS: Mutex<Option<PollIds>> = Mutex::new(None);
+static mut LAST_POLLS: Lazy<Mutex<HashMap::<ChatId, Option<PollIds>>>> = Lazy::new(|| Mutex::new(HashMap::new()));
 
 #[tokio::main]
 async fn main() {
@@ -36,6 +36,7 @@ enum Command {
     MakePoll,
     #[command(description = "Decide quien de los que hayan votado llama hoy.")]
     WhoCalls,
+    TestPolls
 }
 
 async fn answer(bot: Bot, msg: Message, cmd: Command) -> ResponseResult<()> {
@@ -61,7 +62,7 @@ async fn answer(bot: Bot, msg: Message, cmd: Command) -> ResponseResult<()> {
                 unsafe
                 {
                     let mut last_poll_guard = LAST_POLLS.lock().unwrap();
-                    *last_poll_guard = Some(PollIds{entrants_id: first_poll_message.id, seconds_id: second_poll_message.id});
+                    last_poll_guard.insert(msg.chat.id.clone(), Some(PollIds{entrants_id: first_poll_message.id, seconds_id: second_poll_message.id}));
                 }
 
                 second_poll_message
@@ -81,8 +82,11 @@ async fn answer(bot: Bot, msg: Message, cmd: Command) -> ResponseResult<()> {
                     name = user.first_name;
                 }
             }
-            //bot.send_message(msg.chat.id, format!("{}, deja de preguntar, aun no se sabe!", name)).await?
-            bot.send_message(msg.chat.id, "Le ha tocado a Joan. Caray!").await?
+            bot.send_message(msg.chat.id, format!("{}, deja de preguntar, aun no se sabe!", name)).await?
+        }
+        Command::TestPolls => 
+        {
+            bot.send_message(msg.chat.id, "WIP").await?
         }
     };
 

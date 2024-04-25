@@ -1571,6 +1571,7 @@ version = "0.1.0"
 dependencies = [
  "html2text",
  "log",
+ "once_cell",
  "pretty_env_logger",
  "reqwest 0.12.4",
  "teloxide",
