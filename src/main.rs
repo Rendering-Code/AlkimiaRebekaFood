@@ -1,8 +1,9 @@
-use std::{collections::HashMap, sync::Mutex};
+use std::{collections::HashMap, sync::{Arc, Mutex}};
 use reqwest::{header::USER_AGENT, Client, Error};
-use teloxide::{prelude::*, types::{MessageId, MessageKind}, utils::command::BotCommands};
+use teloxide::{dispatching::UpdateFilterExt, prelude::*, update_listeners, utils::command::BotCommands};
 use html2text::from_read;
 use once_cell::sync::Lazy;
+use rand::seq::SliceRandom;
 
 struct Menu
 {
@@ -10,13 +11,14 @@ struct Menu
     seconds: Vec<String>,
 }
 
-struct PollIds
+struct RebekaPollData
 {
-    entrants_id: MessageId,
-    seconds_id: MessageId
+    entrants_id: String,
+    seconds_id: String,
+    participants: Vec<String>
 }
 
-static mut LAST_POLLS: Lazy<Mutex<HashMap::<ChatId, Option<PollIds>>>> = Lazy::new(|| Mutex::new(HashMap::new()));
+static mut LAST_POLLS: Lazy<Mutex<HashMap::<ChatId, RebekaPollData>>> = Lazy::new(|| Mutex::new(HashMap::new()));
 
 #[tokio::main]
 async fn main() {
@@ -24,7 +26,22 @@ async fn main() {
     log::info!("Starting command bot...");
 
     let bot = Bot::from_env();
-    Command::repl(bot, answer).await;
+    let def_handle = |_upd: Arc::<Update>| Box::pin(async {});
+    
+    Dispatcher::builder(
+        bot.clone(),
+        dptree::entry()
+            .branch(Update::filter_message().filter_command::<Command>().endpoint(answer))
+            .branch(Update::filter_poll_answer().endpoint(answer_poll)),
+        )
+        .default_handler(def_handle)
+        .enable_ctrlc_handler()
+        .build()
+        .dispatch_with_listener(
+            update_listeners::polling_default(bot.clone()).await,
+            LoggingErrorHandler::with_custom_text("An error from the update listener"),
+        )
+        .await;
 }
 
 #[derive(BotCommands, Clone)]
@@ -36,7 +53,6 @@ enum Command {
     MakePoll,
     #[command(description = "Decide quien de los que hayan votado llama hoy.")]
     WhoCalls,
-    TestPolls
 }
 
 async fn answer(bot: Bot, msg: Message, cmd: Command) -> ResponseResult<()> {
@@ -62,7 +78,14 @@ async fn answer(bot: Bot, msg: Message, cmd: Command) -> ResponseResult<()> {
                 unsafe
                 {
                     let mut last_poll_guard = LAST_POLLS.lock().unwrap();
-                    last_poll_guard.insert(msg.chat.id.clone(), Some(PollIds{entrants_id: first_poll_message.id, seconds_id: second_poll_message.id}));
+                    last_poll_guard.insert(
+                        msg.chat.id.clone(), 
+                        RebekaPollData
+                        {
+                            entrants_id: first_poll_message.poll().unwrap().id.clone(), 
+                            seconds_id: second_poll_message.poll().unwrap().id.clone(), 
+                            participants: Vec::new()
+                        });
                 }
 
                 second_poll_message
@@ -74,22 +97,47 @@ async fn answer(bot: Bot, msg: Message, cmd: Command) -> ResponseResult<()> {
         },
         Command::WhoCalls =>
         {
-            let mut name = "No se quien eres".to_string();
-            if let MessageKind::Common(message) = msg.kind
+            let text: String;
+            unsafe
             {
-                if let Some(user) = message.from
+                let last_polls = LAST_POLLS.lock().unwrap();
+                if let Some(value) = last_polls.get(&msg.chat.id)
                 {
-                    name = user.first_name;
+                    let random_caller = value.participants.choose(&mut rand::thread_rng());
+                    text = format!("Hoy llama {}!. Si ya has llamado recientemente, vuelve a usar /whocalls", random_caller.unwrap());
+                }
+                else 
+                {
+                    text = "Nadie ha votado a las polls todavia, esperate a que almenos alguien haya votado!".to_string();
                 }
             }
-            bot.send_message(msg.chat.id, format!("{}, deja de preguntar, aun no se sabe!", name)).await?
-        }
-        Command::TestPolls => 
-        {
-            bot.send_message(msg.chat.id, "WIP").await?
+            bot.send_message(msg.chat.id, text).await?
         }
     };
 
+    Ok(())
+}
+
+async fn answer_poll(_: Bot, poll_answer: PollAnswer) -> ResponseResult<()> 
+{
+    unsafe
+    {
+        let mut last_poll_guard = LAST_POLLS.lock().unwrap();
+        last_poll_guard.values_mut().for_each(|x| {
+            if x.entrants_id == poll_answer.poll_id || x.seconds_id == poll_answer.poll_id
+            {
+                if poll_answer.option_ids.is_empty()
+                {
+                    let index = x.participants.iter().position(|x| *x == poll_answer.user.first_name).unwrap();
+                    x.participants.remove(index);
+                }
+                else
+                {
+                    x.participants.push(poll_answer.user.first_name.clone());
+                }
+            }
+        });
+    }
     Ok(())
 }
 
@@ -115,6 +163,9 @@ async fn get_menu() -> Result<Option<Menu>, Error>
         .map(|&x| x[..25].to_lowercase().to_string())
         .collect();
     all_entrants.iter_mut().for_each(|x| x.push_str("..."));
+    let mut xl_menu = all_entrants.get(0).unwrap().clone();
+    xl_menu.push_str(" XL");
+    all_entrants.insert(1, xl_menu);
 
     let mut all_seconds: Vec<String> = real_menu[second_plates..]
         .iter()
