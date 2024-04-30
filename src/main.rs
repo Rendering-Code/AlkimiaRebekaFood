@@ -1,6 +1,6 @@
 use std::{collections::HashMap, sync::{Arc, Mutex}};
 use reqwest::{header::USER_AGENT, Client, Error};
-use teloxide::{dispatching::UpdateFilterExt, prelude::*, types::User, update_listeners, utils::command::BotCommands, RequestError};
+use teloxide::{dispatching::UpdateFilterExt, prelude::*, requests::JsonRequest, types::User, update_listeners, utils::command::BotCommands, RequestError};
 use html2text::from_read;
 use once_cell::sync::Lazy;
 use rand::seq::SliceRandom;
@@ -127,17 +127,15 @@ async fn make_poll(bot: &Bot, msg: &Message) -> Result<Message, crate::RequestEr
     let option_menu = get_menu().await.unwrap_or_else(|_| None);
     let message = if let Some(menu) = option_menu
     {
-        let mut entrants_poll = bot.send_poll(msg.chat.id, String::from("Entrantes"), menu.entrants.clone());
-        entrants_poll.allows_multiple_answers = Some(true);
-        entrants_poll.is_anonymous = Some(false);
-        entrants_poll.disable_notification = Some(false);
-        let first_poll_message = entrants_poll.send().await?;
-        
-        let mut seconds_poll = bot.send_poll(msg.chat.id, String::from("Segundos"), menu.seconds.clone());
-        seconds_poll.allows_multiple_answers = Some(true);
-        seconds_poll.is_anonymous = Some(false);
-        seconds_poll.disable_notification = Some(false);
-        let second_poll_message = seconds_poll.send().await?;
+        let create_poll =  |question: String, options: Vec<String>| {
+            let mut poll = bot.send_poll(msg.chat.id, question, options);
+            poll.allows_multiple_answers = Some(true);
+            poll.is_anonymous = Some(false);
+            poll.disable_notification = Some(false);
+            poll.send()
+        };
+        let first_poll_message = create_poll(String::from("Entrantes"), menu.entrants.clone()).await?;
+        let second_poll_message = create_poll(String::from("Segundos"), menu.seconds.clone()).await?;
 
         unsafe
         {
@@ -189,16 +187,25 @@ async fn show_order(bot: &Bot, msg: &Message) -> Result<Message, crate::RequestE
     unsafe
     {
         let last_polls = LAST_POLLS.lock().unwrap();
-        let mut entrants: HashMap<String, u32> = HashMap::new();
-        let mut seconds: HashMap<String, u32> = HashMap::new();
         if let Some(value) = last_polls.get(&msg.chat.id)
         {
+            let mut entrants: HashMap<String, u32> = HashMap::new();
+            let mut seconds: HashMap<String, u32> = HashMap::new();
+
             let register_dish = |selected: &Vec<i32>, options: &Vec<String>, dishes: &mut HashMap<String, u32>|
             {
+                let last_index = options.len() as i32 - 1;
+                let add_xl = selected.contains(&last_index);
                 for index in selected
                 {
+                    if index == &last_index
+                    {
+                        continue;
+                    }
                     let index = usize::try_from(index.clone()).expect("A negative index was passed as an option");
-                    dishes.entry(options.get(index).unwrap().clone()).and_modify(|x| *x += 1).or_insert(1);
+                    let mut dish = if add_xl {String::from("XL - ")} else {String::new()};
+                    dish.push_str(options.get(index).unwrap().clone().as_str());
+                    dishes.entry(dish).and_modify(|x| *x += 1).or_insert(1);
                 }
             };
 
@@ -260,6 +267,8 @@ async fn answer_poll(_: Bot, poll_answer: PollAnswer) -> ResponseResult<()>
 
 async fn get_menu() -> Result<Option<Menu>, Error>
 {
+    let menu_length = 50;
+
     let client = Client::new();
     let result = client.get("http://restauranterebeka.com/menu/")
         .header(USER_AGENT, "AlkimiaBot/0.1")
@@ -274,21 +283,17 @@ async fn get_menu() -> Result<Option<Menu>, Error>
     let end_index = menu.iter().position(|&x| x.contains("**Menú completo**")).unwrap();
     let real_menu = &menu[entrants_index..end_index];
     let second_plates = real_menu.iter().position(|&x| x.contains("**SEGUNDOS**")).unwrap();
-    let mut all_entrants: Vec<String> = real_menu[..second_plates]
-        .iter()
-        .filter(|&x| !x.contains("*"))
-        .map(|&x| x[..25].to_lowercase().to_string())
-        .collect();
-    all_entrants.iter_mut().for_each(|x| x.push_str("..."));
-    let mut xl_menu = all_entrants.get(0).unwrap().clone();
-    xl_menu.push_str(" XL");
-    all_entrants.insert(1, xl_menu);
 
-    let mut all_seconds: Vec<String> = real_menu[second_plates..]
-        .iter()
-        .filter(|&x| !x.contains("*"))
-        .map(|&x| x[..25].to_lowercase().to_string())
-        .collect();
-    all_seconds.iter_mut().for_each(|x| x.push_str("..."));
-    Ok(Some(Menu{entrants: all_entrants, seconds: all_seconds}))
+    let get_dishes_formated = |dishes: &[&str]|
+    {
+        let mut all_dishes: Vec<String> = dishes
+            .iter()
+            .filter(|&x| !x.contains("*"))
+            .map(|&x| x[..usize::min(x.len(), menu_length)].to_lowercase().to_string())
+            .collect();
+        all_dishes.iter_mut().for_each(|x| x.push_str("..."));
+        all_dishes.push("XL".to_string());
+        all_dishes
+    };
+    Ok(Some(Menu{entrants: get_dishes_formated(&real_menu[..second_plates]), seconds: get_dishes_formated(&real_menu[second_plates..])}))
 }
