@@ -103,7 +103,6 @@ enum Command {
     RankSlowest,
     #[command(description = "Lista de ranking del que ha cambiado mas su voto")]
     RankRetracts,
-
 }
 
 async fn answer(bot: Bot, msg: Message, cmd: Command) -> ResponseResult<()> {
@@ -111,7 +110,7 @@ async fn answer(bot: Bot, msg: Message, cmd: Command) -> ResponseResult<()> {
         Command::Help => bot.send_message(msg.chat.id, Command::descriptions().to_string()).await?,
         Command::MakePoll => make_poll(&bot, &msg).await?,
         Command::WhoCalls => who_calls(&bot, &msg).await?,
-        Command::ShowOrder => wip(&bot, &msg).await?,
+        Command::ShowOrder => show_order(&bot, &msg).await?,
         Command::RankPolls => wip(&bot, &msg).await?,
         Command::RankCalls => wip(&bot, &msg).await?,
         Command::RankSaladsXL => wip(&bot, &msg).await?,
@@ -190,20 +189,37 @@ async fn show_order(bot: &Bot, msg: &Message) -> Result<Message, crate::RequestE
     unsafe
     {
         let last_polls = LAST_POLLS.lock().unwrap();
-        let dishes: HashMap<String, i32> = HashMap::new();
+        let mut entrants: HashMap<String, u32> = HashMap::new();
+        let mut seconds: HashMap<String, u32> = HashMap::new();
         if let Some(value) = last_polls.get(&msg.chat.id)
         {
+            let register_dish = |selected: &Vec<i32>, options: &Vec<String>, dishes: &mut HashMap<String, u32>|
+            {
+                for index in selected
+                {
+                    let index = usize::try_from(index.clone()).expect("A negative index was passed as an option");
+                    dishes.entry(options.get(index).unwrap().clone()).and_modify(|x| *x += 1).or_insert(1);
+                }
+            };
+
             for user in &value.participants
             {
-                for first in user.1.entrants_selected.clone()
-                {
-                    dishes.entry(value.entrants_options.get(&first).unwrap().clone()).and_modify(|x| *x += 1).or_default(1);
-                }
-                for second in user.1.seconds_selected
-                {
-                    
-                }
+                register_dish(&user.1.entrants_selected, &value.entrants_options, &mut entrants);
+                register_dish(&user.1.seconds_selected, &value.seconds_options, &mut seconds);
             }
+
+            let mut final_text: String = String::new();
+            final_text.push_str("Entrantes\n");
+            for value in &entrants
+            {
+                final_text.push_str(format!("{} - {}\n", value.1, value.0).as_str());
+            }
+            final_text.push_str("Seconds\n");
+            for value in &seconds
+            {
+                final_text.push_str(format!("{} - {}\n", value.1, value.0).as_str());
+            }
+            text = final_text.clone();
         }
         else 
         {
@@ -211,11 +227,6 @@ async fn show_order(bot: &Bot, msg: &Message) -> Result<Message, crate::RequestE
         }
     }
     Ok(bot.send_message(msg.chat.id, text).await?)
-}
-
-async fn rank_polls(bot: &Bot, msg: &Message, achivement_requested: &String) -> Result<Message, crate::RequestError>
-{
-    Ok(bot.send_message(msg.chat.id, "Aun no funciona, espera un poco porfavor!").await?)
 }
 
 async fn wip(bot: &Bot, msg: &Message) -> Result<Message, crate::RequestError>
