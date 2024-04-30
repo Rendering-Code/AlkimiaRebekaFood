@@ -1,6 +1,6 @@
 use std::{collections::HashMap, sync::{Arc, Mutex}};
 use reqwest::{header::USER_AGENT, Client, Error};
-use teloxide::{dispatching::UpdateFilterExt, prelude::*, update_listeners, utils::command::BotCommands, RequestError};
+use teloxide::{dispatching::UpdateFilterExt, prelude::*, types::User, update_listeners, utils::command::BotCommands, RequestError};
 use html2text::from_read;
 use once_cell::sync::Lazy;
 use rand::seq::SliceRandom;
@@ -29,11 +29,29 @@ struct PlayerScore
     retracted_votes: u16,
 }
 
+struct RebekaPollAnswers
+{
+    entrants_selected: Vec<i32>,
+    seconds_selected: Vec<i32>
+}
+
+impl RebekaPollAnswers
+{
+    pub fn new() -> Self{
+        RebekaPollAnswers{
+            entrants_selected: Vec::new(),
+            seconds_selected: Vec::new(),
+        }
+    }
+}
+
 struct RebekaPollData
 {
     entrants_id: String,
+    entrants_options: Vec<String>,
     seconds_id: String,
-    participants: Vec<String>
+    seconds_options: Vec<String>,
+    participants: HashMap<User, RebekaPollAnswers>
 }
 
 static mut LAST_POLLS: Lazy<Mutex<HashMap::<ChatId, RebekaPollData>>> = Lazy::new(|| Mutex::new(HashMap::new()));
@@ -71,6 +89,8 @@ enum Command {
     MakePoll,
     #[command(description = "Decide quien de los que hayan votado llama hoy.")]
     WhoCalls,
+    #[command(description = "Muestra el pedido de forma simplificada.")]
+    ShowOrder,
     #[command(description = "Lista de ranking de polls creadas")]
     RankPolls,
     #[command(description = "Lista de ranking llamadas hechas")]
@@ -91,6 +111,7 @@ async fn answer(bot: Bot, msg: Message, cmd: Command) -> ResponseResult<()> {
         Command::Help => bot.send_message(msg.chat.id, Command::descriptions().to_string()).await?,
         Command::MakePoll => make_poll(&bot, &msg).await?,
         Command::WhoCalls => who_calls(&bot, &msg).await?,
+        Command::ShowOrder => wip(&bot, &msg).await?,
         Command::RankPolls => wip(&bot, &msg).await?,
         Command::RankCalls => wip(&bot, &msg).await?,
         Command::RankSaladsXL => wip(&bot, &msg).await?,
@@ -107,13 +128,13 @@ async fn make_poll(bot: &Bot, msg: &Message) -> Result<Message, crate::RequestEr
     let option_menu = get_menu().await.unwrap_or_else(|_| None);
     let message = if let Some(menu) = option_menu
     {
-        let mut entrants_poll = bot.send_poll(msg.chat.id, String::from("Entrantes"), menu.entrants);
+        let mut entrants_poll = bot.send_poll(msg.chat.id, String::from("Entrantes"), menu.entrants.clone());
         entrants_poll.allows_multiple_answers = Some(true);
         entrants_poll.is_anonymous = Some(false);
         entrants_poll.disable_notification = Some(false);
         let first_poll_message = entrants_poll.send().await?;
         
-        let mut seconds_poll = bot.send_poll(msg.chat.id, String::from("Segundos"), menu.seconds);
+        let mut seconds_poll = bot.send_poll(msg.chat.id, String::from("Segundos"), menu.seconds.clone());
         seconds_poll.allows_multiple_answers = Some(true);
         seconds_poll.is_anonymous = Some(false);
         seconds_poll.disable_notification = Some(false);
@@ -126,9 +147,11 @@ async fn make_poll(bot: &Bot, msg: &Message) -> Result<Message, crate::RequestEr
                 msg.chat.id.clone(), 
                 RebekaPollData
                 {
-                    entrants_id: first_poll_message.poll().unwrap().id.clone(), 
+                    entrants_id: first_poll_message.poll().unwrap().id.clone(),
+                    entrants_options: menu.entrants.clone(),
                     seconds_id: second_poll_message.poll().unwrap().id.clone(), 
-                    participants: Vec::new()
+                    seconds_options: menu.seconds,
+                    participants: HashMap::new(),
                 });
         }
 
@@ -149,12 +172,42 @@ async fn who_calls(bot: &Bot, msg: &Message) -> Result<Message, crate::RequestEr
         let last_polls = LAST_POLLS.lock().unwrap();
         if let Some(value) = last_polls.get(&msg.chat.id)
         {
-            let random_caller = value.participants.choose(&mut rand::thread_rng());
-            text = format!("Hoy llama {}!. Si ya has llamado recientemente, vuelve a usar /whocalls", random_caller.unwrap());
+            let users = value.participants.keys().collect::<Vec<&User>>();
+            let random_caller = users.choose(&mut rand::thread_rng());
+            text = format!("Hoy llama {}!. Si ya has llamado recientemente, vuelve a usar /whocalls", random_caller.unwrap().first_name);
         }
         else 
         {
             text = "Nadie ha votado a las polls todavia, esperate a que almenos alguien haya votado!".to_string();
+        }
+    }
+    Ok(bot.send_message(msg.chat.id, text).await?)
+}
+
+async fn show_order(bot: &Bot, msg: &Message) -> Result<Message, crate::RequestError>
+{
+    let text: String;
+    unsafe
+    {
+        let last_polls = LAST_POLLS.lock().unwrap();
+        let dishes: HashMap<String, i32> = HashMap::new();
+        if let Some(value) = last_polls.get(&msg.chat.id)
+        {
+            for user in &value.participants
+            {
+                for first in user.1.entrants_selected.clone()
+                {
+                    dishes.entry(value.entrants_options.get(&first).unwrap().clone()).and_modify(|x| *x += 1).or_default(1);
+                }
+                for second in user.1.seconds_selected
+                {
+                    
+                }
+            }
+        }
+        else 
+        {
+            text = "No hay ningun plato pedido, esperate a que almenos alguien haya votado!".to_string();
         }
     }
     Ok(bot.send_message(msg.chat.id, text).await?)
@@ -162,26 +215,12 @@ async fn who_calls(bot: &Bot, msg: &Message) -> Result<Message, crate::RequestEr
 
 async fn rank_polls(bot: &Bot, msg: &Message, achivement_requested: &String) -> Result<Message, crate::RequestError>
 {
-    let text: String;
-    unsafe
-    {
-        let last_polls = LAST_POLLS.lock().unwrap();
-        if let Some(value) = last_polls.get(&msg.chat.id)
-        {
-            let random_caller = value.participants.choose(&mut rand::thread_rng());
-            text = format!("Hoy llama {}!. Si ya has llamado recientemente, vuelve a usar /whocalls", random_caller.unwrap());
-        }
-        else 
-        {
-            text = "Nadie ha votado a las polls todavia, esperate a que almenos alguien haya votado!".to_string();
-        }
-    }
-    Ok(bot.send_message(msg.chat.id, text).await?)
+    Ok(bot.send_message(msg.chat.id, "Aun no funciona, espera un poco porfavor!").await?)
 }
 
 async fn wip(bot: &Bot, msg: &Message) -> Result<Message, crate::RequestError>
 {
-    Ok(bot.send_message(msg.chat.id, "Work in progress").await?)
+    Ok(bot.send_message(msg.chat.id, "Aun no funciona, espera un poco porfavor!").await?)
 }
 
 async fn answer_poll(_: Bot, poll_answer: PollAnswer) -> ResponseResult<()> 
@@ -193,14 +232,14 @@ async fn answer_poll(_: Bot, poll_answer: PollAnswer) -> ResponseResult<()>
         {
             if x.entrants_id == poll_answer.poll_id || x.seconds_id == poll_answer.poll_id
             {
-                if poll_answer.option_ids.is_empty()
+                let entry = x.participants.entry(poll_answer.user.clone()).or_insert(RebekaPollAnswers::new());
+                if x.entrants_id == poll_answer.poll_id
                 {
-                    let index = x.participants.iter().position(|x| *x == poll_answer.user.first_name).unwrap();
-                    x.participants.remove(index);
+                    entry.entrants_selected = poll_answer.option_ids.clone()
                 }
-                else
+                else 
                 {
-                    x.participants.push(poll_answer.user.first_name.clone());
+                    entry.seconds_selected = poll_answer.option_ids.clone()
                 }
             }
         });
