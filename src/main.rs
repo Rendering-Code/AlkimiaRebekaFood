@@ -1,6 +1,6 @@
 use std::{collections::HashMap, sync::{Arc, Mutex}};
 use reqwest::{header::USER_AGENT, Client, Error};
-use teloxide::{dispatching::UpdateFilterExt, prelude::*, types::User, update_listeners, utils::command::BotCommands, RequestError};
+use teloxide::{dispatching::UpdateFilterExt, prelude::*, types::{Chat, MessageCommon, MessageKind, User}, update_listeners, utils::command::BotCommands, RequestError};
 use html2text::from_read;
 use once_cell::sync::Lazy;
 use rand::seq::SliceRandom;
@@ -13,9 +13,20 @@ struct Menu
 }
 
 #[derive(Serialize, Deserialize)]
-struct BotProgress
+struct Users
 {
-    chats_data: HashMap<i64, Vec<PlayerScore>>,
+    chats_data: HashMap<ChatId, HashMap<UserId, PlayerScore>>,
+}
+
+impl Users
+{
+    pub fn new() -> Self
+    {
+        Users
+        {
+            chats_data: HashMap::new()
+        }
+    }
 }
 
 #[derive(Serialize, Deserialize)]
@@ -30,6 +41,23 @@ struct PlayerScore
     retracted_votes: u16,
 }
 
+impl PlayerScore
+{
+    pub fn new() -> Self
+    {
+        PlayerScore
+        {
+            user_name: Default::default(),
+            polls_made: Default::default(),
+            calls_made: Default::default(),
+            xl_salads: Default::default(),
+            fastest_answering: Default::default(),
+            slowest_answering: Default::default(),
+            retracted_votes: Default::default(),
+        }
+    }
+}
+
 struct RebekaPollAnswers
 {
     entrants_selected: Vec<i32>,
@@ -39,7 +67,8 @@ struct RebekaPollAnswers
 impl RebekaPollAnswers
 {
     pub fn new() -> Self{
-        RebekaPollAnswers{
+        RebekaPollAnswers
+        {
             entrants_selected: Vec::new(),
             seconds_selected: Vec::new(),
         }
@@ -56,7 +85,7 @@ struct RebekaPollData
 }
 
 static mut LAST_POLLS: Lazy<Mutex<HashMap::<ChatId, RebekaPollData>>> = Lazy::new(|| Mutex::new(HashMap::new()));
-static mut USERS: Lazy<Mutex<HashMap::<UserId, PlayerScore>>> = Lazy::new(|| Mutex::new(HashMap::new()));
+static mut CHAT_USERS: Lazy<Mutex<Users>> = Lazy::new(|| Mutex::new(Users::new()));
 
 #[tokio::main]
 async fn main() {
@@ -109,7 +138,13 @@ enum Command {
     RankRetracts,
 }
 
-async fn answer(bot: Bot, msg: Message, cmd: Command) -> ResponseResult<()> {
+async fn answer(bot: Bot, msg: Message, cmd: Command) -> ResponseResult<()> 
+{
+    if let MessageKind::Common(common_message) = &msg.kind
+    {
+        ensure_user_exists(&common_message.from.as_ref().unwrap(), &msg.chat);
+    }
+    
     match cmd {
         Command::Help => bot.send_message(msg.chat.id, Command::descriptions().to_string()).await?,
         Command::MakePoll => make_poll(&bot, &msg).await?,
@@ -125,6 +160,16 @@ async fn answer(bot: Bot, msg: Message, cmd: Command) -> ResponseResult<()> {
     };
 
     Ok(())
+}
+
+fn ensure_user_exists(user: &User, chat: &Chat)
+{
+    unsafe
+    {
+        let mut chats = CHAT_USERS.lock().unwrap();
+        let users = chats.chats_data.entry(chat.id.clone()).or_insert(HashMap::new());
+        users.entry(user.id).or_insert(PlayerScore::new());
+    }
 }
 
 async fn make_poll(bot: &Bot, msg: &Message) -> Result<Message, crate::RequestError>
