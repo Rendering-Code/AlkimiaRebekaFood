@@ -1,6 +1,6 @@
 use std::{collections::HashMap, sync::{Arc, Mutex}};
 use reqwest::{header::USER_AGENT, Client, Error};
-use teloxide::{dispatching::UpdateFilterExt, prelude::*, requests::JsonRequest, types::User, update_listeners, utils::command::BotCommands, RequestError};
+use teloxide::{dispatching::UpdateFilterExt, prelude::*, types::User, update_listeners, utils::command::BotCommands, RequestError};
 use html2text::from_read;
 use once_cell::sync::Lazy;
 use rand::seq::SliceRandom;
@@ -21,6 +21,7 @@ struct BotProgress
 #[derive(Serialize, Deserialize)]
 struct PlayerScore
 {
+    user_name: String,
     polls_made: u16,
     calls_made: u16,
     xl_salads: u16,
@@ -55,6 +56,7 @@ struct RebekaPollData
 }
 
 static mut LAST_POLLS: Lazy<Mutex<HashMap::<ChatId, RebekaPollData>>> = Lazy::new(|| Mutex::new(HashMap::new()));
+static mut USERS: Lazy<Mutex<HashMap::<UserId, PlayerScore>>> = Lazy::new(|| Mutex::new(HashMap::new()));
 
 #[tokio::main]
 async fn main() {
@@ -91,6 +93,8 @@ enum Command {
     WhoCalls,
     #[command(description = "Muestra el pedido de forma simplificada.")]
     ShowOrder,
+    #[command(description = "Cuando hayas hecho la llamada, recuerda de usar.")]
+    CallMade,
     #[command(description = "Lista de ranking de polls creadas")]
     RankPolls,
     #[command(description = "Lista de ranking llamadas hechas")]
@@ -111,6 +115,7 @@ async fn answer(bot: Bot, msg: Message, cmd: Command) -> ResponseResult<()> {
         Command::MakePoll => make_poll(&bot, &msg).await?,
         Command::WhoCalls => who_calls(&bot, &msg).await?,
         Command::ShowOrder => show_order(&bot, &msg).await?,
+        Command::CallMade => wip(&bot, &msg).await?,
         Command::RankPolls => wip(&bot, &msg).await?,
         Command::RankCalls => wip(&bot, &msg).await?,
         Command::RankSaladsXL => wip(&bot, &msg).await?,
@@ -226,7 +231,7 @@ async fn show_order(bot: &Bot, msg: &Message) -> Result<Message, crate::RequestE
             {
                 final_text.push_str(format!("{} - {}\n", value.1, value.0).as_str());
             }
-            text = final_text.clone();
+            text = final_text;
         }
         else 
         {
