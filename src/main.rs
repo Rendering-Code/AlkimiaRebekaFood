@@ -91,7 +91,7 @@ static mut CHAT_USERS: Lazy<Mutex<Users>> = Lazy::new(|| Mutex::new(Users::new()
 async fn main() {
     pretty_env_logger::init();
     log::info!("Starting command bot...");
-
+    
     let bot = Bot::from_env();
     let def_handle = |_upd: Arc::<Update>| Box::pin(async {});
     
@@ -172,6 +172,17 @@ fn ensure_user_exists(user: &User, chat: &Chat)
     }
 }
 
+fn update_player_character<F>(user: &User, chat: &Chat, mut f: F)
+    where F : FnMut(&mut PlayerScore)
+{
+    unsafe
+    {
+        let mut chats = CHAT_USERS.lock().unwrap();
+        let users = chats.chats_data.entry(chat.id.clone()).or_insert(HashMap::new());
+        users.entry(user.id).and_modify(|x| f(x));
+    }
+}
+
 async fn make_poll(bot: &Bot, msg: &Message) -> Result<Message, crate::RequestError>
 {
     let option_menu = get_menu().await.unwrap_or_else(|_| None);
@@ -217,16 +228,16 @@ async fn who_calls(bot: &Bot, msg: &Message) -> Result<Message, crate::RequestEr
     unsafe
     {
         let last_polls = LAST_POLLS.lock().unwrap();
-        if let Some(value) = last_polls.get(&msg.chat.id)
+        text = match last_polls.get(&msg.chat.id)
         {
-            let users = value.participants.keys().collect::<Vec<&User>>();
-            let random_caller = users.choose(&mut rand::thread_rng());
-            text = format!("Hoy llama {}!. Si ya has llamado recientemente, vuelve a usar /whocalls", random_caller.unwrap().first_name);
-        }
-        else 
-        {
-            text = "Nadie ha votado a las polls todavia, esperate a que almenos alguien haya votado!".to_string();
-        }
+            Some(value) if !value.participants.is_empty() => 
+            {
+                let users = value.participants.keys().collect::<Vec<&User>>();
+                let random_caller = users.choose(&mut rand::thread_rng());
+                format!("Hoy llama {}!. Si ya has llamado recientemente, vuelve a usar /whocalls", random_caller.unwrap().first_name)
+            },
+            _ => "Nadie ha votado a las polls todavia, esperate a que almenos alguien haya votado!".to_string()
+        };
     }
     Ok(bot.send_message(msg.chat.id, text).await?)
 }
@@ -237,7 +248,7 @@ async fn show_order(bot: &Bot, msg: &Message) -> Result<Message, crate::RequestE
     unsafe
     {
         let last_polls = LAST_POLLS.lock().unwrap();
-        if let Some(value) = last_polls.get(&msg.chat.id)
+        text = if let Some(value) = last_polls.get(&msg.chat.id)
         {
             let mut entrants: HashMap<String, u32> = HashMap::new();
             let mut seconds: HashMap<String, u32> = HashMap::new();
@@ -276,11 +287,11 @@ async fn show_order(bot: &Bot, msg: &Message) -> Result<Message, crate::RequestE
             {
                 final_text.push_str(format!("{} - {}\n", value.1, value.0).as_str());
             }
-            text = final_text;
+            final_text
         }
         else 
         {
-            text = "No hay ningun plato pedido, esperate a que almenos alguien haya votado!".to_string();
+            "No hay ningun plato pedido, esperate a que almenos alguien haya votado!".to_string()
         }
     }
     Ok(bot.send_message(msg.chat.id, text).await?)
