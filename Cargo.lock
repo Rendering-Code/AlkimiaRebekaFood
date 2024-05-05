@@ -1576,6 +1576,7 @@ dependencies = [
  "rand",
  "reqwest 0.12.4",
  "serde",
+ "serde_json",
  "teloxide",
  "tokio",
 ]

@@ -1,6 +1,6 @@
-use std::{collections::HashMap, sync::{Arc, Mutex}};
+use std::{collections::HashMap, fs::File, io::Write, sync::{Arc, Mutex}};
 use reqwest::{header::USER_AGENT, Client, Error};
-use teloxide::{dispatching::UpdateFilterExt, prelude::*, types::{Chat, MessageCommon, MessageKind, User}, update_listeners, utils::command::BotCommands, RequestError};
+use teloxide::{dispatching::UpdateFilterExt, prelude::*, types::{Chat, MessageKind, User}, update_listeners, utils::command::BotCommands, RequestError};
 use html2text::from_read;
 use once_cell::sync::Lazy;
 use rand::seq::SliceRandom;
@@ -12,7 +12,7 @@ struct Menu
     seconds: Vec<String>,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Default)]
 struct Users
 {
     chats_data: HashMap<ChatId, HashMap<UserId, PlayerScore>>,
@@ -43,11 +43,11 @@ struct PlayerScore
 
 impl PlayerScore
 {
-    pub fn new() -> Self
+    pub fn new(name: String) -> Self
     {
         PlayerScore
         {
-            user_name: Default::default(),
+            user_name: name,
             polls_made: Default::default(),
             calls_made: Default::default(),
             xl_salads: Default::default(),
@@ -77,6 +77,7 @@ impl RebekaPollAnswers
 
 struct RebekaPollData
 {
+    chat_id: ChatId,
     entrants_id: String,
     entrants_options: Vec<String>,
     seconds_id: String,
@@ -86,6 +87,7 @@ struct RebekaPollData
 
 static mut LAST_POLLS: Lazy<Mutex<HashMap::<ChatId, RebekaPollData>>> = Lazy::new(|| Mutex::new(HashMap::new()));
 static mut CHAT_USERS: Lazy<Mutex<Users>> = Lazy::new(|| Mutex::new(Users::new()));
+const JSON_FILE: &str = "users.json";
 
 #[tokio::main]
 async fn main() {
@@ -140,9 +142,9 @@ enum Command {
 
 async fn answer(bot: Bot, msg: Message, cmd: Command) -> ResponseResult<()> 
 {
-    if let MessageKind::Common(common_message) = &msg.kind
+    if let Some(user) = get_user_from(&msg)
     {
-        ensure_user_exists(&common_message.from.as_ref().unwrap(), &msg.chat);
+        ensure_user_exists(user, &msg.chat);
     }
     
     match cmd {
@@ -150,7 +152,7 @@ async fn answer(bot: Bot, msg: Message, cmd: Command) -> ResponseResult<()>
         Command::MakePoll => make_poll(&bot, &msg).await?,
         Command::WhoCalls => who_calls(&bot, &msg).await?,
         Command::ShowOrder => show_order(&bot, &msg).await?,
-        Command::CallMade => wip(&bot, &msg).await?,
+        Command::CallMade => call_made(&bot, &msg).await?,
         Command::RankPolls => wip(&bot, &msg).await?,
         Command::RankCalls => wip(&bot, &msg).await?,
         Command::RankSaladsXL => wip(&bot, &msg).await?,
@@ -162,24 +164,62 @@ async fn answer(bot: Bot, msg: Message, cmd: Command) -> ResponseResult<()>
     Ok(())
 }
 
+fn get_user_from(msg: &Message) -> Option<&User>
+{
+    if let MessageKind::Common(common_message) = &msg.kind
+    {
+        common_message.from.as_ref()    
+    }
+    else
+    {
+        None
+    }
+}
+
 fn ensure_user_exists(user: &User, chat: &Chat)
 {
     unsafe
     {
         let mut chats = CHAT_USERS.lock().unwrap();
+        {
+            let mut file_result = File::open("users.json");
+            if let Ok(json_file) = file_result.as_mut()
+            {
+                *chats = serde_json::from_reader(json_file).unwrap_or_default();
+            }
+        }
         let users = chats.chats_data.entry(chat.id.clone()).or_insert(HashMap::new());
-        users.entry(user.id).or_insert(PlayerScore::new());
+        users.entry(user.id).or_insert(PlayerScore::new(user.first_name.clone()));
     }
+    update_user_to_disk();
 }
 
-fn update_player_character<F>(user: &User, chat: &Chat, mut f: F)
+fn update_player_character<F>(user: &User, chat_id: &ChatId, mut f: F)
     where F : FnMut(&mut PlayerScore)
 {
     unsafe
     {
         let mut chats = CHAT_USERS.lock().unwrap();
-        let users = chats.chats_data.entry(chat.id.clone()).or_insert(HashMap::new());
+        let users = chats.chats_data.entry(chat_id.clone()).or_insert(HashMap::new());
         users.entry(user.id).and_modify(|x| f(x));
+    }
+    update_user_to_disk();
+}
+
+fn update_user_to_disk()
+{
+    let file_result = File::create(JSON_FILE);
+    if let Ok(mut json_file) = file_result
+    {
+        unsafe
+        {
+            let chats = CHAT_USERS.lock().unwrap();
+            let parsed_value = serde_json::to_string(&*chats);
+            if let Ok(value) = parsed_value
+            {
+                json_file.write_all(value.as_bytes()).expect("Something when wrong when creating the json file of the users");
+            }
+        }
     }
 }
 
@@ -205,12 +245,18 @@ async fn make_poll(bot: &Bot, msg: &Message) -> Result<Message, crate::RequestEr
                 msg.chat.id.clone(), 
                 RebekaPollData
                 {
+                    chat_id: msg.chat.id.clone(),
                     entrants_id: first_poll_message.poll().unwrap().id.clone(),
                     entrants_options: menu.entrants.clone(),
                     seconds_id: second_poll_message.poll().unwrap().id.clone(), 
                     seconds_options: menu.seconds,
                     participants: HashMap::new(),
                 });
+        }
+
+        if let Some(user) = get_user_from(&msg)
+        {
+            update_player_character(user, &msg.chat.id, |x| x.polls_made+=1);
         }
 
         second_poll_message
@@ -297,6 +343,15 @@ async fn show_order(bot: &Bot, msg: &Message) -> Result<Message, crate::RequestE
     Ok(bot.send_message(msg.chat.id, text).await?)
 }
 
+async fn call_made(bot: &Bot, msg: &Message) -> Result<Message, crate::RequestError>
+{
+    if let Some(user) = get_user_from(&msg)
+    {
+        update_player_character(user, &msg.chat.id, |x| x.calls_made+=1);
+    }
+    Ok(bot.send_message(msg.chat.id, String::from("Muchas gracias! Todos los que no habeis pedido, lo sentimos.")).await?)
+}
+
 async fn wip(bot: &Bot, msg: &Message) -> Result<Message, crate::RequestError>
 {
     Ok(bot.send_message(msg.chat.id, "Aun no funciona, espera un poco porfavor!").await?)
@@ -311,6 +366,11 @@ async fn answer_poll(_: Bot, poll_answer: PollAnswer) -> ResponseResult<()>
         {
             if x.entrants_id == poll_answer.poll_id || x.seconds_id == poll_answer.poll_id
             {
+                if poll_answer.option_ids.is_empty()
+                {
+                    update_player_character(&poll_answer.user, &x.chat_id, |x| x.retracted_votes+=1);
+                }
+
                 let entry = x.participants.entry(poll_answer.user.clone()).or_insert(RebekaPollAnswers::new());
                 if x.entrants_id == poll_answer.poll_id
                 {
