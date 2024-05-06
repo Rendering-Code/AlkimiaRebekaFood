@@ -134,7 +134,7 @@ enum Command {
     #[command(description = "Lista de ranking llamadas hechas")]
     RankCalls,
     #[command(description = "Lista de ranking de ensaladas XL pedidas")]
-    RankSaladsXL,
+    RankXL,
     #[command(description = "Lista de ranking del que ha pedido mas rapido")]
     RankFastest,
     #[command(description = "Lista de ranking del que ha pedido mas lento")]
@@ -156,12 +156,12 @@ async fn answer(bot: Bot, msg: Message, cmd: Command) -> ResponseResult<()>
         Command::WhoCalls => who_calls(&bot, &msg).await?,
         Command::ShowOrder => show_order(&bot, &msg).await?,
         Command::CallMade => call_made(&bot, &msg).await?,
-        Command::RankPolls => wip(&bot, &msg).await?,
-        Command::RankCalls => wip(&bot, &msg).await?,
-        Command::RankSaladsXL => wip(&bot, &msg).await?,
-        Command::RankFastest => wip(&bot, &msg).await?,
-        Command::RankSlowest => wip(&bot, &msg).await?,
-        Command::RankRetracts => wip(&bot, &msg).await?,
+        Command::RankPolls => show_ranking_for(&bot, &msg, |x| x.polls_made, "Polls creadas").await?,
+        Command::RankCalls => show_ranking_for(&bot, &msg, |x| x.calls_made, "Llamadas hechas").await?,
+        Command::RankXL => show_ranking_for(&bot, &msg, |x| x.xl_dishes, "Platos XL pedidos").await?,
+        Command::RankFastest => show_ranking_for(&bot, &msg, |x| x.fastest_answering, "Votador mas rapido").await?,
+        Command::RankSlowest => show_ranking_for(&bot, &msg, |x| x.slowest_answering, "Votador mas lento").await?,
+        Command::RankRetracts => show_ranking_for(&bot, &msg, |x| x.retracted_votes, "Votador mas dubitativo").await?,
     };
 
     Ok(())
@@ -388,9 +388,32 @@ async fn call_made(bot: &Bot, msg: &Message) -> Result<Message, crate::RequestEr
     Ok(bot.send_message(msg.chat.id, String::from("Muchas gracias! Todos los que no habeis pedido, lo sentimos.")).await?)
 }
 
-async fn wip(bot: &Bot, msg: &Message) -> Result<Message, crate::RequestError>
+async fn show_ranking_for<F>(bot: &Bot, msg: &Message, f: F, title: &str) -> Result<Message, crate::RequestError>
+    where F : Fn(&PlayerScore) -> u16
 {
-    Ok(bot.send_message(msg.chat.id, "Aun no funciona, espera un poco porfavor!").await?)
+    let text = unsafe
+    {
+        let chats = CHAT_USERS.lock().unwrap();
+        if let Some(chat_data) = chats.chats_data.get(&msg.chat.id)
+        {
+            let mut sorted_users = chat_data.values().collect::<Vec<&PlayerScore>>();
+            sorted_users.sort_by(|x, y| f(*x).cmp(&f(*y)));
+            let mut final_text: String = String::new();
+            final_text.push_str(title);
+            final_text.push_str("\n");
+            for (index, user) in sorted_users.iter().enumerate()
+            {
+                final_text.push_str(format!("\n{} - {}. Puntuacion: {}", index, user.user_name, f(*user)).as_str());
+            }
+            final_text
+        }
+        else
+        {
+            "Este servidor no tiene ranking todavia, usa el bot antes!".to_string()
+        }
+    };
+
+    Ok(bot.send_message(msg.chat.id, text).await?)
 }
 
 async fn answer_poll(_: Bot, poll_answer: PollAnswer) -> ResponseResult<()> 
