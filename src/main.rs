@@ -39,6 +39,7 @@ struct PlayerScore
     fastest_answering: u16,
     slowest_answering: u16,
     retracted_votes: u16,
+    out_of_time: u16,
 }
 
 impl PlayerScore
@@ -54,6 +55,7 @@ impl PlayerScore
             fastest_answering: Default::default(),
             slowest_answering: Default::default(),
             retracted_votes: Default::default(),
+            out_of_time: Default::default(),
         }
     }
 }
@@ -141,6 +143,8 @@ enum Command {
     RankSlowest,
     #[command(description = "Lista de ranking del que ha cambiado mas su voto")]
     RankRetracts,
+    #[command(description = "Lista de ranking del que ha votado fuera de tiempo")]
+    RankVeryLate,
 }
 
 async fn answer(bot: Bot, msg: Message, cmd: Command) -> ResponseResult<()> 
@@ -162,6 +166,7 @@ async fn answer(bot: Bot, msg: Message, cmd: Command) -> ResponseResult<()>
         Command::RankFastest => show_ranking_for(&bot, &msg, |x| x.fastest_answering, "Votador mas rapido").await?,
         Command::RankSlowest => show_ranking_for(&bot, &msg, |x| x.slowest_answering, "Votador mas lento").await?,
         Command::RankRetracts => show_ranking_for(&bot, &msg, |x| x.retracted_votes, "Votador mas dubitativo").await?,
+        Command::RankVeryLate => show_ranking_for(&bot, &msg, |x| x.out_of_time, "Votador fuera de tiempo").await?,
     };
 
     Ok(())
@@ -385,7 +390,7 @@ async fn call_made(bot: &Bot, msg: &Message) -> ResponseResult<Message>
         }
         chat_data.is_call_made = true;
     }
-    Ok(bot.send_message(msg.chat.id, String::from("Muchas gracias! Todos los que no habeis pedido, lo sentimos.")).await?)
+    Ok(bot.send_message(msg.chat.id, String::from("Muchas gracias por llamar! Todos los que no habeis pedido, lo sentimos.")).await?)
 }
 
 async fn show_ranking_for<F>(bot: &Bot, msg: &Message, f: F, title: &str) -> ResponseResult<Message>
@@ -429,7 +434,9 @@ async fn answer_poll(bot: Bot, poll_answer: PollAnswer) -> ResponseResult<()>
             {
                 if x.is_call_made
                 {
+                    update_player_character(&poll_answer.user, &x.chat_id, |x| x.out_of_time+=1);
                     result = Some((x.chat_id, format!("Lo siento {}, pero ya se ha llamado al restaurante, habla con quien ha llamado para ver si se puede solucionar", &poll_answer.user.first_name)));
+                    return;
                 }
 
                 if poll_answer.option_ids.is_empty()
