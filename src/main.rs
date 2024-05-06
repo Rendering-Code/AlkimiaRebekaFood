@@ -35,7 +35,7 @@ struct PlayerScore
     user_name: String,
     polls_made: u16,
     calls_made: u16,
-    xl_salads: u16,
+    xl_dishes: u16,
     fastest_answering: u16,
     slowest_answering: u16,
     retracted_votes: u16,
@@ -50,7 +50,7 @@ impl PlayerScore
             user_name: name,
             polls_made: Default::default(),
             calls_made: Default::default(),
-            xl_salads: Default::default(),
+            xl_dishes: Default::default(),
             fastest_answering: Default::default(),
             slowest_answering: Default::default(),
             retracted_votes: Default::default(),
@@ -82,7 +82,10 @@ struct RebekaPollData
     entrants_options: Vec<String>,
     seconds_id: String,
     seconds_options: Vec<String>,
-    participants: HashMap<User, RebekaPollAnswers>
+    participants: HashMap<User, RebekaPollAnswers>,
+    first_vote_sent: bool,
+    last_vote_user: Option<User>,
+    is_call_made: bool,
 }
 
 static mut LAST_POLLS: Lazy<Mutex<HashMap::<ChatId, RebekaPollData>>> = Lazy::new(|| Mutex::new(HashMap::new()));
@@ -251,6 +254,9 @@ async fn make_poll(bot: &Bot, msg: &Message) -> Result<Message, crate::RequestEr
                     seconds_id: second_poll_message.poll().unwrap().id.clone(), 
                     seconds_options: menu.seconds,
                     participants: HashMap::new(),
+                    first_vote_sent: false,
+                    last_vote_user: None,
+                    is_call_made: false
                 });
         }
 
@@ -299,10 +305,11 @@ async fn show_order(bot: &Bot, msg: &Message) -> Result<Message, crate::RequestE
             let mut entrants: HashMap<String, u32> = HashMap::new();
             let mut seconds: HashMap<String, u32> = HashMap::new();
 
-            let register_dish = |selected: &Vec<i32>, options: &Vec<String>, dishes: &mut HashMap<String, u32>|
+            let register_dish = |selected: &Vec<i32>, options: &Vec<String>, dishes: &mut HashMap<String, u32>, has_xl: &mut bool|
             {
                 let last_index = options.len() as i32 - 1;
                 let add_xl = selected.contains(&last_index);
+                *has_xl |= add_xl;
                 for index in selected
                 {
                     if index == &last_index
@@ -318,8 +325,13 @@ async fn show_order(bot: &Bot, msg: &Message) -> Result<Message, crate::RequestE
 
             for user in &value.participants
             {
-                register_dish(&user.1.entrants_selected, &value.entrants_options, &mut entrants);
-                register_dish(&user.1.seconds_selected, &value.seconds_options, &mut seconds);
+                let mut has_xl: bool = false;
+                register_dish(&user.1.entrants_selected, &value.entrants_options, &mut entrants, &mut has_xl);
+                register_dish(&user.1.seconds_selected, &value.seconds_options, &mut seconds, &mut has_xl);
+                if has_xl
+                {
+                    update_player_character(user.0, &msg.chat.id, |x| x.xl_dishes+=1);
+                }
             }
 
             let mut final_text: String = String::new();
@@ -345,9 +357,33 @@ async fn show_order(bot: &Bot, msg: &Message) -> Result<Message, crate::RequestE
 
 async fn call_made(bot: &Bot, msg: &Message) -> Result<Message, crate::RequestError>
 {
+    let is_call_made;
+    unsafe
+    {
+        let mut last_poll_guard = LAST_POLLS.lock().unwrap();
+        let chat_data = last_poll_guard.get_mut(&msg.chat.id).unwrap();
+        is_call_made = chat_data.is_call_made;
+    }
+
+    if is_call_made 
+    {
+        return Ok(bot.send_message(msg.chat.id, String::from("Alguien ya ha llamado! Tened cuidado no se dupliquen los pedidos")).await?)
+    }
+
     if let Some(user) = get_user_from(&msg)
     {
         update_player_character(user, &msg.chat.id, |x| x.calls_made+=1);
+    }
+
+    unsafe
+    {
+        let mut last_poll_guard = LAST_POLLS.lock().unwrap();
+        let chat_data = last_poll_guard.get_mut(&msg.chat.id).unwrap();
+        if let Some(user) = chat_data.last_vote_user.as_ref()
+        {
+            update_player_character(user, &msg.chat.id, |x| x.slowest_answering+=1);
+        }
+        chat_data.is_call_made = true;
     }
     Ok(bot.send_message(msg.chat.id, String::from("Muchas gracias! Todos los que no habeis pedido, lo sentimos.")).await?)
 }
@@ -370,6 +406,14 @@ async fn answer_poll(_: Bot, poll_answer: PollAnswer) -> ResponseResult<()>
                 {
                     update_player_character(&poll_answer.user, &x.chat_id, |x| x.retracted_votes+=1);
                 }
+
+                if !x.first_vote_sent
+                {
+                    update_player_character(&poll_answer.user, &x.chat_id, |x| x.fastest_answering+=1);
+                    x.first_vote_sent = true;
+                }
+
+                x.last_vote_user = Some(poll_answer.user.clone());
 
                 let entry = x.participants.entry(poll_answer.user.clone()).or_insert(RebekaPollAnswers::new());
                 if x.entrants_id == poll_answer.poll_id
