@@ -226,7 +226,7 @@ fn update_user_to_disk()
     }
 }
 
-async fn make_poll(bot: &Bot, msg: &Message) -> Result<Message, crate::RequestError>
+async fn make_poll(bot: &Bot, msg: &Message) -> ResponseResult<Message>
 {
     let option_menu = get_menu().await.unwrap_or_else(|_| None);
     let message = if let Some(menu) = option_menu
@@ -274,7 +274,7 @@ async fn make_poll(bot: &Bot, msg: &Message) -> Result<Message, crate::RequestEr
     Ok(message)
 }
 
-async fn who_calls(bot: &Bot, msg: &Message) -> Result<Message, crate::RequestError>
+async fn who_calls(bot: &Bot, msg: &Message) -> ResponseResult<Message>
 {
     let text: String;
     unsafe
@@ -294,7 +294,7 @@ async fn who_calls(bot: &Bot, msg: &Message) -> Result<Message, crate::RequestEr
     Ok(bot.send_message(msg.chat.id, text).await?)
 }
 
-async fn show_order(bot: &Bot, msg: &Message) -> Result<Message, crate::RequestError>
+async fn show_order(bot: &Bot, msg: &Message) -> ResponseResult<Message>
 {
     let text: String;
     unsafe
@@ -355,7 +355,7 @@ async fn show_order(bot: &Bot, msg: &Message) -> Result<Message, crate::RequestE
     Ok(bot.send_message(msg.chat.id, text).await?)
 }
 
-async fn call_made(bot: &Bot, msg: &Message) -> Result<Message, crate::RequestError>
+async fn call_made(bot: &Bot, msg: &Message) -> ResponseResult<Message>
 {
     let is_call_made;
     unsafe
@@ -388,7 +388,7 @@ async fn call_made(bot: &Bot, msg: &Message) -> Result<Message, crate::RequestEr
     Ok(bot.send_message(msg.chat.id, String::from("Muchas gracias! Todos los que no habeis pedido, lo sentimos.")).await?)
 }
 
-async fn show_ranking_for<F>(bot: &Bot, msg: &Message, f: F, title: &str) -> Result<Message, crate::RequestError>
+async fn show_ranking_for<F>(bot: &Bot, msg: &Message, f: F, title: &str) -> ResponseResult<Message>
     where F : Fn(&PlayerScore) -> u16
 {
     let text = unsafe
@@ -399,11 +399,12 @@ async fn show_ranking_for<F>(bot: &Bot, msg: &Message, f: F, title: &str) -> Res
             let mut sorted_users = chat_data.values().collect::<Vec<&PlayerScore>>();
             sorted_users.sort_by(|x, y| f(*x).cmp(&f(*y)));
             let mut final_text: String = String::new();
+            final_text.push_str("Ranking: ");
             final_text.push_str(title);
             final_text.push_str("\n");
             for (index, user) in sorted_users.iter().enumerate()
             {
-                final_text.push_str(format!("\n{} - {}. Puntuacion: {}", index, user.user_name, f(*user)).as_str());
+                final_text.push_str(format!("\n{} - {}. Puntuacion: {}", index+1, user.user_name, f(*user)).as_str());
             }
             final_text
         }
@@ -416,15 +417,21 @@ async fn show_ranking_for<F>(bot: &Bot, msg: &Message, f: F, title: &str) -> Res
     Ok(bot.send_message(msg.chat.id, text).await?)
 }
 
-async fn answer_poll(_: Bot, poll_answer: PollAnswer) -> ResponseResult<()> 
+async fn answer_poll(bot: Bot, poll_answer: PollAnswer) -> ResponseResult<()> 
 {
-    unsafe
+    let send_message: Option<(ChatId, String)> = unsafe
     {
         let mut last_poll_guard = LAST_POLLS.lock().unwrap();
+        let mut result = None;
         last_poll_guard.values_mut().for_each(|x| 
         {
             if x.entrants_id == poll_answer.poll_id || x.seconds_id == poll_answer.poll_id
             {
+                if x.is_call_made
+                {
+                    result = Some((x.chat_id, format!("Lo siento {}, pero ya se ha llamado al restaurante, habla con quien ha llamado para ver si se puede solucionar", &poll_answer.user.first_name)));
+                }
+
                 if poll_answer.option_ids.is_empty()
                 {
                     update_player_character(&poll_answer.user, &x.chat_id, |x| x.retracted_votes+=1);
@@ -449,6 +456,11 @@ async fn answer_poll(_: Bot, poll_answer: PollAnswer) -> ResponseResult<()>
                 }
             }
         });
+        result
+    };
+    if let Some(value) = send_message
+    {
+        bot.send_message(value.0, value.1).await?;
     }
     Ok(())
 }
