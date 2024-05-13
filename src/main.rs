@@ -500,10 +500,12 @@ async fn get_menu() -> Result<Option<Menu>, Error>
         .text()
         .await?;
 
+    let end_of_menus = vec!["**Menú completo**", "***MENU BURGER***"];
+
     let binding = from_read(result.as_bytes(), 200);
     let menu: Vec<&str> = binding.split("\n").filter(|x| !x.is_empty()).collect();
     let entrants_index = menu.iter().position(|&x| x.contains("**ENTRANTES**")).unwrap();
-    let end_index = menu.iter().position(|&x| x.contains("**Menú completo**")).unwrap();
+    let end_index = menu.iter().position(|&x| end_of_menus.iter().any(|line| x.contains(line))).unwrap();
     let real_menu = &menu[entrants_index..end_index];
     let second_plates = real_menu.iter().position(|&x| x.contains("**SEGUNDOS**")).unwrap();
 
