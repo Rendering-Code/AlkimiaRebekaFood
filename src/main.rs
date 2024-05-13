@@ -1,6 +1,6 @@
 use std::{collections::HashMap, fs::File, io::Write, sync::{Arc, Mutex}};
 use reqwest::{header::USER_AGENT, Client, Error};
-use teloxide::{dispatching::UpdateFilterExt, prelude::*, types::{Chat, MessageKind, User}, update_listeners, utils::command::BotCommands, RequestError};
+use teloxide::{dispatching::UpdateFilterExt, prelude::*, types::{Chat, MessageKind, User}, update_listeners, utils::command::BotCommands};
 use html2text::from_read;
 use once_cell::sync::Lazy;
 use rand::seq::SliceRandom;
@@ -36,6 +36,7 @@ struct PlayerScore
     polls_made: u16,
     calls_made: u16,
     xl_dishes: u16,
+    tupper_count: u16,
     fastest_answering: u16,
     slowest_answering: u16,
     retracted_votes: u16,
@@ -52,6 +53,7 @@ impl PlayerScore
             polls_made: Default::default(),
             calls_made: Default::default(),
             xl_dishes: Default::default(),
+            tupper_count: Default::default(),
             fastest_answering: Default::default(),
             slowest_answering: Default::default(),
             retracted_votes: Default::default(),
@@ -100,7 +102,9 @@ async fn main() {
     log::info!("Starting command bot...");
     
     let bot = Bot::from_env();
-    let def_handle = |_upd: Arc::<Update>| Box::pin(async {});
+    let def_handle = |_upd: Arc::<Update>| Box::pin(async {
+
+    });
     
     Dispatcher::builder(
         bot.clone(),
@@ -131,6 +135,8 @@ enum Command {
     ShowOrder,
     #[command(description = "Cuando hayas hecho la llamada, recuerda de usar.")]
     CallMade,
+    #[command(description = "Si has traido tupper, llama este commando, seremos buenos.")]
+    HoyTengoTupper,
     #[command(description = "Lista de ranking de polls creadas")]
     RankPolls,
     #[command(description = "Lista de ranking llamadas hechas")]
@@ -160,6 +166,7 @@ async fn answer(bot: Bot, msg: Message, cmd: Command) -> ResponseResult<()>
         Command::WhoCalls => who_calls(&bot, &msg).await?,
         Command::ShowOrder => show_order(&bot, &msg).await?,
         Command::CallMade => call_made(&bot, &msg).await?,
+        Command::HoyTengoTupper => has_tupper(&bot, &msg).await?,
         Command::RankPolls => show_ranking_for(&bot, &msg, |x| x.polls_made, "Polls creadas").await?,
         Command::RankCalls => show_ranking_for(&bot, &msg, |x| x.calls_made, "Llamadas hechas").await?,
         Command::RankXL => show_ranking_for(&bot, &msg, |x| x.xl_dishes, "Platos XL pedidos").await?,
@@ -391,6 +398,15 @@ async fn call_made(bot: &Bot, msg: &Message) -> ResponseResult<Message>
         chat_data.is_call_made = true;
     }
     Ok(bot.send_message(msg.chat.id, String::from("Muchas gracias por llamar! Todos los que no habeis pedido, lo sentimos.")).await?)
+}
+
+async fn has_tupper(bot: &Bot, msg: &Message) -> ResponseResult<Message>
+{
+    if let Some(user) = get_user_from(&msg)
+    {
+        update_player_character(user, &msg.chat.id, |x| x.tupper_count+=1);
+    }
+    Ok(bot.send_message(msg.chat.id, String::from("Shame on you!")).await?)
 }
 
 async fn show_ranking_for<F>(bot: &Bot, msg: &Message, f: F, title: &str) -> ResponseResult<Message>
