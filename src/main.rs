@@ -151,6 +151,8 @@ enum Command {
     RankRetracts,
     #[command(description = "Lista de ranking del que ha votado fuera de tiempo")]
     RankVeryLate,
+    #[command(description = "Lista de la verguenza, quien ha traido mas tuppers")]
+    RankTuppers,
 }
 
 async fn answer(bot: Bot, msg: Message, cmd: Command) -> ResponseResult<()> 
@@ -174,6 +176,7 @@ async fn answer(bot: Bot, msg: Message, cmd: Command) -> ResponseResult<()>
         Command::RankSlowest => show_ranking_for(&bot, &msg, |x| x.slowest_answering, "Votador mas lento").await?,
         Command::RankRetracts => show_ranking_for(&bot, &msg, |x| x.retracted_votes, "Votador mas dubitativo").await?,
         Command::RankVeryLate => show_ranking_for(&bot, &msg, |x| x.out_of_time, "Votador fuera de tiempo").await?,
+        Command::RankTuppers => show_ranking_for(&bot, &msg, |x| x.tupper_count, "Tuppers en vez de Rebeka").await?,
     };
 
     Ok(())
@@ -419,6 +422,7 @@ async fn show_ranking_for<F>(bot: &Bot, msg: &Message, f: F, title: &str) -> Res
         {
             let mut sorted_users = chat_data.values().collect::<Vec<&PlayerScore>>();
             sorted_users.sort_by(|x, y| f(*x).cmp(&f(*y)));
+            sorted_users.reverse();
             let mut final_text: String = String::new();
             final_text.push_str("Ranking: ");
             final_text.push_str(title);
