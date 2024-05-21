@@ -103,7 +103,6 @@ async fn main() {
     
     let bot = Bot::from_env();
     let def_handle = |_upd: Arc::<Update>| Box::pin(async {
-
     });
     
     Dispatcher::builder(
@@ -127,6 +126,8 @@ async fn main() {
 enum Command {
     #[command(description = "Comando de ayuda")]
     Help,
+    #[command(description = "Check status")]
+    AreYouAlive,
     #[command(description = "Crear la poll para entrantes y segundos.")]
     MakePoll,
     #[command(description = "Decide quien de los que hayan votado llama hoy.")]
@@ -164,6 +165,7 @@ async fn answer(bot: Bot, msg: Message, cmd: Command) -> ResponseResult<()>
     
     match cmd {
         Command::Help => bot.send_message(msg.chat.id, Command::descriptions().to_string()).await?,
+        Command::AreYouAlive => bot.send_message(msg.chat.id, "I'm alive :D").await?,
         Command::MakePoll => make_poll(&bot, &msg).await?,
         Command::WhoCalls => who_calls(&bot, &msg).await?,
         Command::ShowOrder => show_order(&bot, &msg).await?,
@@ -504,9 +506,10 @@ async fn get_menu() -> Result<Option<Menu>, Error>
         .text()
         .await?;
 
-    let end_of_menus = vec!["**Menú completo**", "***MENU BURGER***"];
-
+    let end_of_menus = vec!["**Menú completo**", "***MENU BURGER***", "MENÚ MAGRET"];
+    
     let binding = from_read(result.as_bytes(), 200);
+    println!("{}", &binding);
     let menu: Vec<&str> = binding.split("\n").filter(|x| !x.is_empty()).collect();
     let entrants_index = menu.iter().position(|&x| x.contains("**ENTRANTES**")).unwrap();
     let end_index = menu.iter().position(|&x| end_of_menus.iter().any(|line| x.contains(line))).unwrap();
