@@ -1,16 +1,10 @@
 use std::{collections::HashMap, fs::File, io::Write, sync::{Arc, Mutex}};
-use reqwest::{header::USER_AGENT, Client, Error};
 use teloxide::{dispatching::UpdateFilterExt, prelude::*, types::{Chat, MessageKind, User}, update_listeners, utils::command::BotCommands};
-use html2text::from_read;
 use once_cell::sync::Lazy;
 use rand::seq::SliceRandom;
 use serde::{Serialize, Deserialize};
 
-struct Menu
-{
-    entrants: Vec<String>,
-    seconds: Vec<String>,
-}
+mod rebeka_menu;
 
 #[derive(Serialize, Deserialize, Default)]
 struct Users
@@ -132,6 +126,8 @@ enum Command {
     MakePoll,
     #[command(description = "Decide quien de los que hayan votado llama hoy.")]
     WhoCalls,
+    #[command(description = "Bueno...")]
+    WhoCallsTrueLegit,
     #[command(description = "Muestra el pedido de forma simplificada.")]
     ShowOrder,
     #[command(description = "Cuando hayas hecho la llamada, recuerda de usar.")]
@@ -168,6 +164,7 @@ async fn answer(bot: Bot, msg: Message, cmd: Command) -> ResponseResult<()>
         Command::AreYouAlive => bot.send_message(msg.chat.id, "I'm alive :D").await?,
         Command::MakePoll => make_poll(&bot, &msg).await?,
         Command::WhoCalls => who_calls(&bot, &msg).await?,
+        Command::WhoCallsTrueLegit => bot.send_message(msg.chat.id, "Tras usar todo el poder computazional aleatorio del mundo, ha salido... Andrea!").await?,
         Command::ShowOrder => show_order(&bot, &msg).await?,
         Command::CallMade => call_made(&bot, &msg).await?,
         Command::HoyTengoTupper => has_tupper(&bot, &msg).await?,
@@ -245,7 +242,7 @@ fn update_user_to_disk()
 
 async fn make_poll(bot: &Bot, msg: &Message) -> ResponseResult<Message>
 {
-    let option_menu = get_menu().await.unwrap_or_else(|_| None);
+    let option_menu = rebeka_menu::get_menu().await.unwrap_or_else(|_| None);
     let message = if let Some(menu) = option_menu
     {
         let create_poll =  |question: String, options: Vec<String>| {
@@ -492,40 +489,4 @@ async fn answer_poll(bot: Bot, poll_answer: PollAnswer) -> ResponseResult<()>
         bot.send_message(value.0, value.1).await?;
     }
     Ok(())
-}
-
-async fn get_menu() -> Result<Option<Menu>, Error>
-{
-    let menu_length = 50;
-
-    let client = Client::new();
-    let result = client.get("http://restauranterebeka.com/menu/")
-        .header(USER_AGENT, "AlkimiaBot/0.1")
-        .send()
-        .await?
-        .text()
-        .await?;
-
-    let end_of_menus = vec!["**Menú completo**", "***MENU BURGER***", "MENÚ MAGRET"];
-    
-    let binding = from_read(result.as_bytes(), 200);
-    println!("{}", &binding);
-    let menu: Vec<&str> = binding.split("\n").filter(|x| !x.is_empty()).collect();
-    let entrants_index = menu.iter().position(|&x| x.contains("**ENTRANTES**")).unwrap();
-    let end_index = menu.iter().position(|&x| end_of_menus.iter().any(|line| x.contains(line))).unwrap();
-    let real_menu = &menu[entrants_index..end_index];
-    let second_plates = real_menu.iter().position(|&x| x.contains("**SEGUNDOS**")).unwrap();
-
-    let get_dishes_formated = |dishes: &[&str]|
-    {
-        let mut all_dishes: Vec<String> = dishes
-            .iter()
-            .filter(|&x| !x.contains("*"))
-            .map(|&x| x[..usize::min(x.len(), menu_length)].to_lowercase().to_string())
-            .collect();
-        all_dishes.iter_mut().for_each(|x| x.push_str("..."));
-        all_dishes.push("XL".to_string());
-        all_dishes
-    };
-    Ok(Some(Menu{entrants: get_dishes_formated(&real_menu[..second_plates]), seconds: get_dishes_formated(&real_menu[second_plates..])}))
 }
