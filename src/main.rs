@@ -66,6 +66,7 @@ enum Command {
     RankVeryLate,
     #[command(description = "Lista de la verguenza, quien ha traido mas tuppers")]
     RankTuppers,
+    HiddenRank
 }
 
 async fn answer(bot: Bot, msg: Message, cmd: Command) -> ResponseResult<()> 
@@ -77,7 +78,7 @@ async fn answer(bot: Bot, msg: Message, cmd: Command) -> ResponseResult<()>
     
     match cmd 
     {
-        Command::Help => bot.send_message(msg.chat.id, Command::descriptions().to_string()).await?,
+        Command::Help => bot.send_message(msg.chat.id, parch_description(Command::descriptions().to_string())).await?,
         Command::AreYouAlive => bot.send_message(msg.chat.id, translation_manager::get_i_am_alive()).await?,
         Command::MakePoll => bot_commands::make_poll(&bot, &msg).await?,
         Command::WhoCalls => bot_commands::who_calls(&bot, &msg).await?,
@@ -93,7 +94,14 @@ async fn answer(bot: Bot, msg: Message, cmd: Command) -> ResponseResult<()>
         Command::RankRetracts => bot_commands::show_ranking_for(&bot, &msg, |x| x.retracted_votes, translation_manager::get_rectract_votes_title()).await?,
         Command::RankVeryLate => bot_commands::show_ranking_for(&bot, &msg, |x| x.out_of_time, translation_manager::get_vote_out_of_time_title()).await?,
         Command::RankTuppers => bot_commands::show_ranking_for(&bot, &msg, |x| x.tupper_count, translation_manager::get_tuppers_title()).await?,
+        _ => bot.send_message(msg.chat.id, "Hidden secret").await?,
     };
 
     Ok(())
+}
+
+fn parch_description(description: String) -> String
+{
+    let filtered_description: Vec<&str> = description.split("\n").filter(|x| !x.contains("hidden")).collect();
+    filtered_description.join("\n")
 }
